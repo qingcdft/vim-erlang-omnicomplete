@@ -128,6 +128,9 @@ q_log(Title, Msg) ->
     file:write_file("/mnt/d/dev/log.txt", io_lib:format("~s:~p\n", [Title, Msg]), [append]),
     ok.
 
+base_names(rebar3) -> ["rebar.lock"];
+base_names(makefile) -> ["./bin/Emakefile"].
+
 %%%=============================================================================
 %%% Parse command line arguments
 %%%=============================================================================
@@ -166,11 +169,6 @@ parse_args([Verbose|OtherArgs], Acc) when Verbose == "-v";
     log("Verbose mode on.~n"),
     parse_args(OtherArgs, Acc);
 parse_args(["--basedir", BaseDir|OtherArgs], Acc) ->
-    BuildSystem = case lists:member("ErlangExample", string:tokens(BaseDir, "/")) of
-        true -> rebar3;
-        _ -> makefile
-    end,
-    set_build_system(BuildSystem),
     put(basedir, BaseDir),
     parse_args(OtherArgs, Acc);
 parse_args(["--basedir"], _Acc) ->
@@ -185,18 +183,6 @@ parse_args([PosPar|OtherArgs], Acc) ->
     parse_args(OtherArgs, [PosPar|Acc]);
 parse_args([], Acc) ->
     Acc.
-
-set_build_system(BuildSystem) ->
-    put(build_system, BuildSystem).
-
-get_build_system() ->
-    case get(build_system) of
-        undefined -> makefile;
-        BuildSystem -> BuildSystem
-    end.
-
-base_names(rebar3) -> ["rebar.lock"];
-base_names(makefile) -> ["./bin/Emakefile"].
 
 %%------------------------------------------------------------------------------
 %% @doc Print the script's help text.
@@ -250,30 +236,30 @@ Examples:
       Query :: list_modules |
                {list_functions, module()}.
 run(Target) ->
+    run2(Target).
+    %AbsDir =
+    %    case get(basedir) of
+    %        undefined ->
+    %            {ok, Cwd} = file:get_cwd(),
+    %            Cwd;
+    %        BaseDir ->
+    %            filename:absname(BaseDir)
+    %    end,
+    %put(compiled_file_path, AbsDir),
 
-    AbsDir =
-        case get(basedir) of
-            undefined ->
-                {ok, Cwd} = file:get_cwd(),
-                Cwd;
-            BaseDir ->
-                filename:absname(BaseDir)
-        end,
-    put(compiled_file_path, AbsDir),
-
-    {_AppRoot, _ProjectRoot, BuildSystemOpts} = load_build_info(AbsDir),
-    case BuildSystemOpts of
-        {opts, _Opts} ->
-            try
-                run2(Target)
-            catch
-                throw:error ->
-                    % The error messages were already printed.
-                    ok
-            end;
-        error ->
-            error
-    end.
+    %{_AppRoot, _ProjectRoot, BuildSystemOpts} = load_build_info(AbsDir),
+    %case BuildSystemOpts of
+    %    {opts, _Opts} ->
+    %        try
+    %            run2(Target)
+    %        catch
+    %            throw:error ->
+    %                % The error messages were already printed.
+    %                ok
+    %        end;
+    %    error ->
+    %        error
+    %end.
 
 %%%=============================================================================
 %%% Load build information.
@@ -313,7 +299,10 @@ load_build_info(Path) ->
                 Root
         end,
     
-    BuildSystem1 = get_build_system(),
+    BuildSystem1 = case lists:member("ErlangExample", string:tokens(AppRoot, "/")) of
+        true -> rebar3;
+        _ -> makefile
+    end,
     BaseNames = base_names(BuildSystem1),
     {BuildSystem, BuildFiles} = 
     case find_files(Path, BaseNames) of
@@ -364,53 +353,52 @@ is_app_root(Path) ->
 %% used.
 %% @end
 %%------------------------------------------------------------------------------
-%-spec guess_build_system(Path) -> Result when
-%      ProjectType :: atom(),
-%      Path :: string(),
-%      Result :: {build_system(),
-%                 BuildFiles :: [string()]}.
-%guess_build_system(Path) ->
-%    BaseNames = ["./bin/Emakefile"],
+-spec guess_build_system(Path) -> Result when
+      Path :: string(),
+      Result :: {build_system(),
+                 BuildFiles :: [string()]}.
+guess_build_system(Path) ->
+    BaseNames = ["./bin/Emakefile"],
     % The order is important, at least Makefile needs to come last since a lot
     % of projects include a Makefile along any other build system.
-    %BuildSystems = [
-    %                {rebar3, [
-    %                          "rebar.lock"
-    %                         ]
-    %                },
-    %                {rebar, [
-    %                         "rebar.config",
-    %                         "rebar.config.script"
-    %                        ]
-    %                },
-    %                {makefile, [
-    %                        "Makefile"
-    %                       ]
-    %                }
-    %               ],
-    %guess_build_system(Path, BuildSystems).
+    BuildSystems = [
+                    {rebar3, [
+                              "rebar.lock"
+                             ]
+                    },
+                    {rebar, [
+                             "rebar.config",
+                             "rebar.config.script"
+                            ]
+                    },
+                    {makefile, [
+                            "Makefile"
+                           ]
+                    }
+                   ],
+    guess_build_system(Path, BuildSystems).
 
 %%------------------------------------------------------------------------------
 %% @doc Check which build system's files are contained by the project.
 %% @end
 %%------------------------------------------------------------------------------
-%-spec guess_build_system(Path, BuildSystems) -> Result when
-%      BuildSystems :: [{build_system(),
-%                        BaseNames :: [string()]}],
-%      Path :: string(),
-%      Result :: {build_system(),
-%                 BuildFiles :: [string()]}.
-%guess_build_system(_Path, []) ->
-%    log("Unknown build system.~n"),
-%    {unknown_build_system, []};
-%guess_build_system(Path, [{BuildSystem, BaseNames}|Rest]) ->
-%    log("Try build system: ~p~n", [BuildSystem]),
-%    case find_files(Path, BaseNames) of
-%        [] ->
-%            guess_build_system(Path, Rest);
-%        BuildFiles ->
-%            {BuildSystem, BuildFiles}
-%    end.
+-spec guess_build_system(Path, BuildSystems) -> Result when
+      BuildSystems :: [{build_system(),
+                        BaseNames :: [string()]}],
+      Path :: string(),
+      Result :: {build_system(),
+                 BuildFiles :: [string()]}.
+guess_build_system(_Path, []) ->
+    log("Unknown build system.~n"),
+    {unknown_build_system, []};
+guess_build_system(Path, [{BuildSystem, BaseNames}|Rest]) ->
+    log("Try build system: ~p~n", [BuildSystem]),
+    case find_files(Path, BaseNames) of
+        [] ->
+            guess_build_system(Path, Rest);
+        BuildFiles ->
+            {BuildSystem, BuildFiles}
+    end.
 
 %%------------------------------------------------------------------------------
 %% @doc Get the root directory of the project.
@@ -507,10 +495,8 @@ load_build_files(unknown_build_system, ProjectRoot, _) ->
     code:add_pathsa([absname(".", "../server/ebin")]),
     code:add_pathsa([absname(".", "../ebin")]),
     {opts, [
-            %{i, absname(ProjectRoot, "include")},
-            %{i, absname(ProjectRoot, "../include")},
-            {i, absname(ProjectRoot, "inc")},
-            {i, absname(ProjectRoot, "../inc")},
+            {i, absname(ProjectRoot, "include")},
+            {i, absname(ProjectRoot, "../include")},
             {i, ProjectRoot}
            ]}.
 
@@ -853,8 +839,7 @@ load_makefiles([Makefile|_Rest]) ->
     code:add_pathsa(filelib:wildcard(absname(Path, "deps") ++ "/*/ebin")),
     code:add_pathsa(filelib:wildcard(absname(Path, "lib") ++ "/*/ebin")),
     {opts, [
-            %{i, absname(Path, "include")},
-            {i, absname(Path, "inc")},
+            {i, absname(Path, "include")},
             {i, absname(Path, "deps")},
             {i, absname(Path, "lib")}]
     }.
@@ -894,32 +879,83 @@ run2(list_modules) ->
     ok;
 
 run2({list_functions, Mod}) ->
+    Pid = self(),
+    spawn(fun() -> run_edoc(Pid, Mod) end),
+    spawn(fun() -> run_info(Pid, Mod) end),
 
-    Edoc =
-        try
-            module_edoc(Mod)
-        catch
-            _:_ ->
-                []
-        end,
-
-    Info =
-        try
-            module_info2(Mod)
-        catch
-            _:_ ->
-                []
-        end,
-
-    case {Edoc, Info} of
+    receive
+        {info, InfoT} -> put(info, InfoT)
+    end,
+    receive
+        {edoc, EdocT} -> put(edoc, EdocT)
+    end,
+    case {get(edoc), get(info)} of
         {[], []} ->
             io:format("Module not found.\n");
-        _ ->
+        {Edoc, Info} ->
             FunSpecs = merge_functions(Edoc, Info),
             io:format("execution_successful\n"),
             [print_function(Fun) || Fun <- FunSpecs ],
             ok
     end.
+
+    %Edoc =
+    %    try
+    %        module_edoc(Mod)
+    %    catch
+    %        _:_ ->
+    %            []
+    %    end,
+
+    %Info =
+    %    try
+    %        module_info2(Mod)
+    %    catch
+    %        _:_ ->
+    %            []
+    %    end,
+
+    %case {Edoc, Info} of
+    %    {[], []} ->
+    %        io:format("Module not found.\n");
+    %    _ ->
+    %        FunSpecs = merge_functions(Edoc, Info),
+    %        io:format("execution_successful\n"),
+    %        [print_function(Fun) || Fun <- FunSpecs ],
+    %        ok
+    %end.
+
+run_edoc(Pid, Mod) ->
+    Edoc =
+    try
+        module_edoc(Mod)
+    catch
+        _:_ ->
+            []
+    end,
+    Pid ! {edoc, Edoc},
+    ok.
+
+run_info(Pid, Mod) ->
+    AbsDir =
+        case get(basedir) of
+            undefined ->
+                {ok, Cwd} = file:get_cwd(),
+                Cwd;
+            BaseDir ->
+                filename:absname(BaseDir)
+        end,
+    put(compiled_file_path, AbsDir),
+    {_AppRoot, _ProjectRoot, _BuildSystemOpts} = load_build_info(AbsDir),
+    Info =
+    try
+        module_info2(Mod)
+    catch
+        _:_ ->
+            []
+    end,
+    Pid ! {info, Info},
+    ok.
 
 %%------------------------------------------------------------------------------
 %% @doc Return the specification of all exported functions.
