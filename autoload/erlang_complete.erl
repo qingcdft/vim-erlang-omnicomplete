@@ -1,4 +1,6 @@
 #!/usr/bin/env escript
+%% -*- erlang -*-
+%%! -smp enable -sname factorial -mnesia debug verbose
 
 %%% This script prints all modules or prints all functions of a module.
 %%%
@@ -105,10 +107,7 @@
 %%------------------------------------------------------------------------------
 -spec main(Args) -> no_return() when
       Args :: [string()].
-main([]) ->
-    io:format("Usage: see --help.~n"),
-    halt(2);
-main(Args) ->
+main(Args = [_ | _]) ->
     PositionalParams = parse_args(Args),
     case PositionalParams of
         ["list-modules"] ->
@@ -118,7 +117,16 @@ main(Args) ->
         _ ->
             log_error("Erroneous parameters: ~p~n", [PositionalParams]),
             halt(2)
-    end.
+    end;
+main(_) ->
+    io:format("Usage: see --help.~n"),
+    halt(2).
+
+q_log(Msg) ->
+    q_log("", Msg).
+q_log(Title, Msg) ->
+    file:write_file("/mnt/d/dev/log.txt", io_lib:format("~s:~p\n", [Title, Msg]), [append]),
+    ok.
 
 %%%=============================================================================
 %%% Parse command line arguments
@@ -148,8 +156,6 @@ parse_args(Args) ->
       Args :: [string()],
       Acc :: [PositionalParam :: string()],
       PositionalParams :: [string()].
-parse_args([], Acc) ->
-    Acc;
 parse_args([Help|_], _Acc) when Help == "-h";
                                 Help == "--help" ->
     print_help(),
@@ -160,6 +166,11 @@ parse_args([Verbose|OtherArgs], Acc) when Verbose == "-v";
     log("Verbose mode on.~n"),
     parse_args(OtherArgs, Acc);
 parse_args(["--basedir", BaseDir|OtherArgs], Acc) ->
+    BuildSystem = case lists:member("ErlangExample", string:tokens(BaseDir, "/")) of
+        true -> rebar3;
+        _ -> makefile
+    end,
+    set_build_system(BuildSystem),
     put(basedir, BaseDir),
     parse_args(OtherArgs, Acc);
 parse_args(["--basedir"], _Acc) ->
@@ -171,7 +182,21 @@ parse_args([[$-|_] = Arg|_], _Acc) ->
     log_error("Unknown option: ~s~n", [Arg]),
     halt(2);
 parse_args([PosPar|OtherArgs], Acc) ->
-    parse_args(OtherArgs, [PosPar|Acc]).
+    parse_args(OtherArgs, [PosPar|Acc]);
+parse_args([], Acc) ->
+    Acc.
+
+set_build_system(BuildSystem) ->
+    put(build_system, BuildSystem).
+
+get_build_system() ->
+    case get(build_system) of
+        undefined -> makefile;
+        BuildSystem -> BuildSystem
+    end.
+
+base_names(rebar3) -> ["rebar.lock"];
+base_names(makefile) -> ["./bin/Emakefile"].
 
 %%------------------------------------------------------------------------------
 %% @doc Print the script's help text.
@@ -237,7 +262,6 @@ run(Target) ->
     put(compiled_file_path, AbsDir),
 
     {_AppRoot, _ProjectRoot, BuildSystemOpts} = load_build_info(AbsDir),
-
     case BuildSystemOpts of
         {opts, _Opts} ->
             try
@@ -288,8 +312,17 @@ load_build_info(Path) ->
                 log("Found project root: ~p~n", [Root]),
                 Root
         end,
-
-    {BuildSystem, BuildFiles} = guess_build_system(AppRoot),
+    
+    BuildSystem1 = get_build_system(),
+    BaseNames = base_names(BuildSystem1),
+    {BuildSystem, BuildFiles} = 
+    case find_files(Path, BaseNames) of
+        [] ->
+            {unknown_build_system, []};
+        BuildFilesT ->
+            {BuildSystem1, BuildFilesT}
+    end,
+    %guess_build_system(AppRoot),
 
     % ProjectRoot: the directory of the Erlang release (if it exists; otherwise
     % same as AppRoot).
@@ -323,59 +356,61 @@ find_app_root(Path) ->
 -spec is_app_root(Path) -> boolean() when
       Path :: string().
 is_app_root(Path) ->
-    filelib:wildcard("ebin/*.app", Path) /= [] orelse
-    filelib:wildcard("src/*.app.src", Path) /= [].
+    filelib:wildcard("ebin/*.app", Path) /= [].
+    %orelse filelib:wildcard("src/*.app.src", Path) /= [].
 
 %%------------------------------------------------------------------------------
 %% @doc Check for some known files and try to guess what build system is being
 %% used.
 %% @end
 %%------------------------------------------------------------------------------
--spec guess_build_system(Path) -> Result when
-      Path :: string(),
-      Result :: {build_system(),
-                 BuildFiles :: [string()]}.
-guess_build_system(Path) ->
+%-spec guess_build_system(Path) -> Result when
+%      ProjectType :: atom(),
+%      Path :: string(),
+%      Result :: {build_system(),
+%                 BuildFiles :: [string()]}.
+%guess_build_system(Path) ->
+%    BaseNames = ["./bin/Emakefile"],
     % The order is important, at least Makefile needs to come last since a lot
     % of projects include a Makefile along any other build system.
-    BuildSystems = [
-                    {rebar3, [
-                              "rebar.lock"
-                             ]
-                    },
-                    {rebar, [
-                             "rebar.config",
-                             "rebar.config.script"
-                            ]
-                    },
-                    {makefile, [
-                            "Makefile"
-                           ]
-                    }
-                   ],
-    guess_build_system(Path, BuildSystems).
+    %BuildSystems = [
+    %                {rebar3, [
+    %                          "rebar.lock"
+    %                         ]
+    %                },
+    %                {rebar, [
+    %                         "rebar.config",
+    %                         "rebar.config.script"
+    %                        ]
+    %                },
+    %                {makefile, [
+    %                        "Makefile"
+    %                       ]
+    %                }
+    %               ],
+    %guess_build_system(Path, BuildSystems).
 
 %%------------------------------------------------------------------------------
 %% @doc Check which build system's files are contained by the project.
 %% @end
 %%------------------------------------------------------------------------------
--spec guess_build_system(Path, BuildSystems) -> Result when
-      BuildSystems :: [{build_system(),
-                        BaseNames :: [string()]}],
-      Path :: string(),
-      Result :: {build_system(),
-                 BuildFiles :: [string()]}.
-guess_build_system(_Path, []) ->
-    log("Unknown build system.~n"),
-    {unknown_build_system, []};
-guess_build_system(Path, [{BuildSystem, BaseNames}|Rest]) ->
-    log("Try build system: ~p~n", [BuildSystem]),
-    case find_files(Path, BaseNames) of
-        [] ->
-            guess_build_system(Path, Rest);
-        BuildFiles ->
-            {BuildSystem, BuildFiles}
-    end.
+%-spec guess_build_system(Path, BuildSystems) -> Result when
+%      BuildSystems :: [{build_system(),
+%                        BaseNames :: [string()]}],
+%      Path :: string(),
+%      Result :: {build_system(),
+%                 BuildFiles :: [string()]}.
+%guess_build_system(_Path, []) ->
+%    log("Unknown build system.~n"),
+%    {unknown_build_system, []};
+%guess_build_system(Path, [{BuildSystem, BaseNames}|Rest]) ->
+%    log("Try build system: ~p~n", [BuildSystem]),
+%    case find_files(Path, BaseNames) of
+%        [] ->
+%            guess_build_system(Path, Rest);
+%        BuildFiles ->
+%            {BuildSystem, BuildFiles}
+%    end.
 
 %%------------------------------------------------------------------------------
 %% @doc Get the root directory of the project.
@@ -387,9 +422,8 @@ guess_build_system(Path, [{BuildSystem, BaseNames}|Rest]) ->
       AppRoot :: string(),
       ProjectRoot :: string().
 get_project_root(rebar3, BuildFiles, _) ->
-    RebarLocks = [F || F <- BuildFiles,
+    RebarLocksWithPriority = [{F, rebar3_lock_priority(F)} || F <- BuildFiles,
                        filename:basename(F) == "rebar.lock"],
-    RebarLocksWithPriority = [{F, rebar3_lock_priority(F)} || F <- RebarLocks],
     {RebarLock, _Priority} = hd(lists:keysort(2, RebarLocksWithPriority)),
     filename:dirname(RebarLock);
 get_project_root(_BuildSystem, _Files, AppRoot) ->
@@ -458,7 +492,7 @@ load_build_files(rebar, _ProjectRoot, ConfigFiles) ->
     load_rebar_files(ConfigFiles, no_config);
 load_build_files(rebar3, ProjectRoot, _ConfigFiles) ->
     % _ConfigFiles is a list containing only rebar.lock.
-    ConfigNames = ["rebar.config", "rebar.config.script"],
+    ConfigNames = ["rebar.config"],
     case find_files(ProjectRoot, ConfigNames) of
         [] ->
             log_error("rebar.config not found in ~p~n", [ProjectRoot]),
@@ -469,9 +503,14 @@ load_build_files(rebar3, ProjectRoot, _ConfigFiles) ->
 load_build_files(makefile, _ProjectRoot, ConfigFiles) ->
     load_makefiles(ConfigFiles);
 load_build_files(unknown_build_system, ProjectRoot, _) ->
+    code:add_pathsa([absname(".", "ebin")]),
+    code:add_pathsa([absname(".", "../server/ebin")]),
+    code:add_pathsa([absname(".", "../ebin")]),
     {opts, [
-            {i, absname(ProjectRoot, "include")},
-            {i, absname(ProjectRoot, "../include")},
+            %{i, absname(ProjectRoot, "include")},
+            %{i, absname(ProjectRoot, "../include")},
+            {i, absname(ProjectRoot, "inc")},
+            {i, absname(ProjectRoot, "../inc")},
             {i, ProjectRoot}
            ]}.
 
@@ -808,12 +847,17 @@ remove_warnings_as_errors(ErlOpts) ->
                 error.
 load_makefiles([Makefile|_Rest]) ->
     Path = filename:dirname(Makefile),
+    code:add_pathsa([absname(Path, "../ebin")]),
+    code:add_pathsa([absname(Path, "../server/ebin")]),
     code:add_pathsa([absname(Path, "ebin")]),
     code:add_pathsa(filelib:wildcard(absname(Path, "deps") ++ "/*/ebin")),
     code:add_pathsa(filelib:wildcard(absname(Path, "lib") ++ "/*/ebin")),
-    {opts, [{i, absname(Path, "include")},
+    {opts, [
+            %{i, absname(Path, "include")},
+            {i, absname(Path, "inc")},
             {i, absname(Path, "deps")},
-            {i, absname(Path, "lib")}]}.
+            {i, absname(Path, "lib")}]
+    }.
 
 %%%=============================================================================
 %%% Execution
@@ -855,9 +899,7 @@ run2({list_functions, Mod}) ->
         try
             module_edoc(Mod)
         catch
-            throw:not_found ->
-                [];
-            error:{badmatch, _} ->
+            _:_ ->
                 []
         end,
 
@@ -865,7 +907,7 @@ run2({list_functions, Mod}) ->
         try
             module_info2(Mod)
         catch
-            error:undef ->
+            _:_ ->
                 []
         end,
 
@@ -935,22 +977,43 @@ find_source(Mod) ->
 find_source(Mod) ->
     case filename:find_src(Mod) of
         {error, _} ->
-            BeamFile = atom_to_list(Mod) ++ ".beam",
-            case code:where_is_file(BeamFile) of
-                non_existing ->
-                    throw(not_found);
-                BeamPath ->
-                    SrcPath = beam_to_src_path(BeamPath),
-                    case filelib:is_regular(SrcPath) of
-                        true ->
-                            SrcPath;
-                        false ->
-                            throw(not_found)
+            case file_dir(Mod) of
+                {ok, Dir} ->
+                    Dir;
+                _ ->
+                    BeamFile = atom_to_list(Mod) ++ ".beam",
+                    case code:where_is_file(BeamFile) of
+                        non_existing ->
+                            throw(not_found);
+                        BeamPath ->
+                            SrcPath = beam_to_src_path(BeamPath),
+                            case filelib:is_regular(SrcPath) of
+                                true ->
+                                    SrcPath;
+                                false ->
+                                    throw(not_found)
+                            end
                     end
             end;
         {File0, _} ->
             File0 ++ ".erl"
     end.
+
+file_dir(Mod) ->
+    case Mod:module_info(compile) of
+        [_, _, {source, Dir}] ->
+            PathParts = filename:split(Dir),
+            do_file_dir(PathParts);
+        _ ->
+            error
+    end.
+do_file_dir(["src" | _] = Path) ->
+    {ok, Dir} = file:get_cwd(),
+    {ok, filename:join([Dir | Path])};
+do_file_dir([_ | Rest]) ->
+    do_file_dir(Rest);
+do_file_dir(_) ->
+    error.
 
 %%------------------------------------------------------------------------------
 %% @doc Convert the path of a BEAM file to the path of the corresponding Erlang
@@ -1405,15 +1468,26 @@ find_file(Path, [File|Rest]) ->
       Path :: string(),
       Files :: [string()],
       Result :: [string()].
-find_files("/", Files) ->
-    find_file("/", Files);
-find_files([_|":/"] = Path, Files) ->
-    % E.g. "C:/". This happens on Windows.
-    find_file(Path, Files);
+  
+%find_files("/", Files) ->
+%    find_file("/", Files);
+%find_files([_|":/"] = Path, Files) ->
+%    % E.g. "C:/". This happens on Windows.
+%    find_file(Path, Files);
+%find_files(Path, Files) ->
+%    ParentPath = filename:dirname(Path),
+%    find_file(Path, Files) ++
+%    find_files(ParentPath, Files).
+
 find_files(Path, Files) ->
+    find_files(Path, Files, "").
+find_files("/", Files, Result) ->
+    Result ++ find_file("/", Files);
+find_files([_|":/"] = Path, Files, Result) ->
+    Result ++ find_file(Path, Files);
+find_files(Path, Files, Result) ->
     ParentPath = filename:dirname(Path),
-    find_file(Path, Files) ++
-    find_files(ParentPath, Files).
+    find_files(ParentPath, Files, Result ++ find_file(Path, Files)).
 
 %%------------------------------------------------------------------------------
 %% @doc Log the given entry if we are in verbose mode.
@@ -1431,13 +1505,15 @@ log(Format) ->
 -spec log(Format, Data) -> ok when
       Format :: io:format(),
       Data :: [term()].
-log(Format, Data) ->
-    case get(verbose) of
-        true ->
-            io:format(Format, Data);
-        _ ->
-            ok
-    end.
+log(_, _) ->
+    ok.
+%log(Format, Data) ->
+%    case get(verbose) of
+%        true ->
+%            io:format(Format, Data);
+%        _ ->
+%            ok
+%    end.
 
 %%------------------------------------------------------------------------------
 %% @doc Log the given error.
