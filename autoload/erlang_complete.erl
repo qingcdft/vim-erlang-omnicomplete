@@ -122,10 +122,8 @@ main(_) ->
     io:format("Usage: see --help.~n"),
     halt(2).
 
-q_log(Msg) ->
-    q_log("", Msg).
-q_log(Title, Msg) ->
-    file:write_file("/mnt/d/dev/log.txt", io_lib:format("~s:~p\n", [Title, Msg]), [append]),
+q_log(Format, Args) ->
+    file:write_file("/Users/qingcdft/.vim/plugged/vim-erlang-omnicomplete/log.txt", io_lib:format(Format ++ "\n", Args), [append]),
     ok.
 
 base_names(rebar3) -> ["rebar.lock"];
@@ -236,30 +234,29 @@ Examples:
       Query :: list_modules |
                {list_functions, module()}.
 run(Target) ->
-    run2(Target).
-    %AbsDir =
-    %    case get(basedir) of
-    %        undefined ->
-    %            {ok, Cwd} = file:get_cwd(),
-    %            Cwd;
-    %        BaseDir ->
-    %            filename:absname(BaseDir)
-    %    end,
-    %put(compiled_file_path, AbsDir),
+    AbsDir =
+        case get(basedir) of
+            undefined ->
+                {ok, Cwd} = file:get_cwd(),
+                Cwd;
+            BaseDir ->
+                filename:absname(BaseDir)
+        end,
+    put(compiled_file_path, AbsDir),
 
-    %{_AppRoot, _ProjectRoot, BuildSystemOpts} = load_build_info(AbsDir),
-    %case BuildSystemOpts of
-    %    {opts, _Opts} ->
-    %        try
-    %            run2(Target)
-    %        catch
-    %            throw:error ->
-    %                % The error messages were already printed.
-    %                ok
-    %        end;
-    %    error ->
-    %        error
-    %end.
+    {_AppRoot, _ProjectRoot, BuildSystemOpts} = load_build_info(AbsDir),
+    case BuildSystemOpts of
+        {opts, _Opts} ->
+            try
+                run2(Target)
+            catch
+                throw:error ->
+                    % The error messages were already printed.
+                    ok
+            end;
+        error ->
+            error
+    end.
 
 %%%=============================================================================
 %%% Load build information.
@@ -299,10 +296,11 @@ load_build_info(Path) ->
                 Root
         end,
     
-    BuildSystem1 = case lists:member("ErlangExample", string:tokens(AppRoot, "/")) of
-        true -> rebar3;
-        _ -> makefile
-    end,
+    BuildSystem1 = rebar3,
+    %BuildSystem1 = case lists:member("ErlangExample", string:tokens(AppRoot, "/")) of
+    %    true -> rebar3;
+    %    _ -> makefile
+    %end,
     BaseNames = base_names(BuildSystem1),
     {BuildSystem, BuildFiles} = 
     case find_files(Path, BaseNames) of
@@ -937,16 +935,6 @@ run_edoc(Pid, Mod) ->
     ok.
 
 run_info(Pid, Mod) ->
-    AbsDir =
-        case get(basedir) of
-            undefined ->
-                {ok, Cwd} = file:get_cwd(),
-                Cwd;
-            BaseDir ->
-                filename:absname(BaseDir)
-        end,
-    put(compiled_file_path, AbsDir),
-    {_AppRoot, _ProjectRoot, _BuildSystemOpts} = load_build_info(AbsDir),
     Info =
     try
         module_info2(Mod)
@@ -968,7 +956,6 @@ run_info(Pid, Mod) ->
       Result :: [function_spec()].
 module_edoc(Mod) ->
     File = find_source(Mod),
-
     {_, Doc} =
         try
             % We ask Edoc to:
@@ -1036,11 +1023,16 @@ find_source(Mod) ->
     end.
 
 file_dir(Mod) ->
-    case Mod:module_info(compile) of
-        [_, _, {source, Dir}] ->
-            PathParts = filename:split(Dir),
-            do_file_dir(PathParts);
-        _ ->
+    try
+        case Mod:module_info(compile) of
+            [_, _, {source, Dir}] ->
+                PathParts = filename:split(Dir),
+                do_file_dir(PathParts);
+            _ ->
+                error
+        end
+    catch
+        _ : _ ->
             error
     end.
 do_file_dir(["src" | _] = Path) ->
@@ -1541,12 +1533,12 @@ log(Format) ->
 -spec log(Format, Data) -> ok when
       Format :: io:format(),
       Data :: [term()].
-log(_, _) ->
-    ok.
-%log(Format, Data) ->
+%log(_, _) ->
+%    ok.
+log(Format, Data) ->
 %    case get(verbose) of
 %        true ->
-%            io:format(Format, Data);
+            io:format(Format, Data).
 %        _ ->
 %            ok
 %    end.
